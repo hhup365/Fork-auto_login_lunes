@@ -12,9 +12,9 @@ from pyvirtualdisplay import Display
 """
 批量登录 https://betadash.lunes.host/login?next=/
 登录成功后：
-  0) 从登录成功后的“Manage Servers”界面里，找到 <a href="/servers/63585" class="server-card">
+  0) 从登录成功后的"Manage Servers"界面里，找到 <a href="/servers/63585" class="server-card">
      - 提取 href 里的数字作为 server_id（例如 63585）
-     - 点击该 a（或 open 对应 URL），进入 server 控制台页（等 “Now managing” 出现）
+     - 点击该 a（或 open 对应 URL），进入 server 控制台页（等 "Now managing" 出现）
   1) server 页停留 4-6 秒
   2) 返回 https://betadash.lunes.host/ 页面，停留 3-5 秒
   3) 点击退出按钮 /logout 退出（不做 JS 强制点击、不做重试）
@@ -31,23 +31,24 @@ a2@example.com,pass2,123456:AAxxxxxx,123456789
 
 LOGIN_URL = "https://betadash.lunes.host/login?next=/"
 HOME_URL = "https://betadash.lunes.host/"
+LOGOUT_URL = "https://betadash.lunes.host/logout"
 SERVER_URL_TPL = "https://betadash.lunes.host/servers/{server_id}"
 
 SCREENSHOT_DIR = "screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-# ✅ 登录表单选择器（你给的）
+# ✅ 登录表单选择器
 EMAIL_SEL = "#email"
 PASS_SEL = "#password"
 SUBMIT_SEL = 'button.submit-btn[type="submit"]'
 
-# ✅ 登录成功后出现的退出按钮（你给的）
+# ✅ 登录成功后出现的退出按钮
 LOGOUT_SEL = 'a[href="/logout"].action-btn.ghost'
 
-# ✅ server 页面加载成功标志：出现 “Now managing”
+# ✅ server 页面加载成功标志：出现 "Now managing"
 NOW_MANAGING_XPATH = 'xpath=//p[contains(normalize-space(.), "Now managing")]'
 
-# ✅ 服务器卡片（你给的）：<a href="/servers/63585" class="server-card">
+# ✅ 服务器卡片：<a href="/servers/63585" class="server-card">
 SERVER_CARD_LINK_SEL = 'a.server-card[href^="/servers/"]'
 
 
@@ -111,7 +112,6 @@ def build_accounts_from_env() -> List[Dict[str, str]]:
 
         parts = [p.strip() for p in line.split(",")]
 
-        # ✅ 新格式：2列 or 4列
         if len(parts) not in (2, 4):
             raise RuntimeError(
                 f"❌ ACCOUNTS_BATCH 第 {idx} 行格式不对（必须是 email,password 或 "
@@ -141,35 +141,24 @@ def build_accounts_from_env() -> List[Dict[str, str]]:
 
 
 def _has_cf_clearance(sb: SB) -> bool:
-    """
-    # CF: 通过检查 Cloudflare 下发的 cf_clearance cookie 来判断是否过盾（仅用于日志/诊断）
-    """
     try:
-        cookies = sb.get_cookies()  # CF
-        cf_clearance = next((c["value"] for c in cookies if c.get("name") == "cf_clearance"), None)  # CF
-        print("🧩 cf_clearance:", "OK" if cf_clearance else "NONE")  # CF
-        return bool(cf_clearance)  # CF
+        cookies = sb.get_cookies()
+        cf_clearance = next((c["value"] for c in cookies if c.get("name") == "cf_clearance"), None)
+        print("🧩 cf_clearance:", "OK" if cf_clearance else "NONE")
+        return bool(cf_clearance)
     except Exception:
         return False
 
 
 def _try_click_captcha(sb: SB, stage: str):
-    """
-    # CF: 尝试自动点击 Turnstile / Cloudflare Challenge（能点则点）
-    """
     try:
-        sb.uc_gui_click_captcha()  # CF
-        time.sleep(3)  # CF
+        sb.uc_gui_click_captcha()
+        time.sleep(3)
     except Exception as e:
-        print(f"⚠️ captcha 点击异常（{stage}）：{e}")  # CF
+        print(f"⚠️ captcha 点击异常（{stage}）：{e}")
 
 
 def _is_logged_in(sb: SB) -> Tuple[bool, Optional[str]]:
-    """
-    登录成功特征（业务判定，不属于 CF 逻辑）：
-      - h1.hero-title 包含 Welcome back
-      - 或 LOGOUT 按钮可见
-    """
     welcome_text = None
     try:
         if sb.is_element_visible("h1.hero-title"):
@@ -189,9 +178,6 @@ def _is_logged_in(sb: SB) -> Tuple[bool, Optional[str]]:
 
 
 def _extract_server_id_from_href(href: str) -> Optional[str]:
-    """
-    从 "/servers/63585" 或 "https://.../servers/63585" 提取 63585
-    """
     if not href:
         return None
     m = re.search(r"/servers/(\d+)", href)
@@ -199,15 +185,7 @@ def _extract_server_id_from_href(href: str) -> Optional[str]:
 
 
 def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
-    """
-    在登录成功后的页面里：
-      - 找到 a.server-card[href^="/servers/"]
-      - 提取 server_id
-      - 点击这个 a 进入 server 页（并等待 Now managing）
-    返回 (server_id, entered_ok)
-    """
     try:
-        # 先确保 server-card 出现（说明 Manage Servers 区块渲染出来了）
         sb.wait_for_element_visible(SERVER_CARD_LINK_SEL, timeout=25)
     except Exception:
         screenshot(sb, f"server_card_not_found_{int(time.time())}.png")
@@ -224,18 +202,14 @@ def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
         screenshot(sb, f"server_id_extract_failed_{int(time.time())}.png")
         return None, False
 
-    # 进入 server 页面：优先 click（符合你说的“点击 a 标签会跳转”）
     try:
         print(f"🧭 提取到 server_id={server_id}，点击 server-card 跳转...")
         sb.scroll_to(SERVER_CARD_LINK_SEL)
         time.sleep(0.3)
         sb.click(SERVER_CARD_LINK_SEL)
-
-        # 等待 “Now managing” 出现，确认 server 页加载成功
         sb.wait_for_element_visible(NOW_MANAGING_XPATH, timeout=30)
         return server_id, True
     except Exception:
-        # click 失败兜底：直接 open 目标 URL
         try:
             server_url = SERVER_URL_TPL.format(server_id=server_id)
             print(f"⚠️ 点击跳转失败，改为直接打开：{server_url}")
@@ -247,13 +221,61 @@ def _find_server_id_and_go_server_page(sb: SB) -> Tuple[Optional[str], bool]:
             return server_id, False
 
 
+# ✅ 修复：更健壮的退出逻辑，增加直接访问 /logout URL 的兜底
+def _do_logout(sb: SB) -> bool:
+    """
+    尝试退出登录，返回是否成功。
+    策略：
+      1) 先尝试点击 LOGOUT_SEL 按钮
+      2) 失败则直接 open LOGOUT_URL（/logout）
+    成功标志：URL 包含 /login 或 登录表单可见
+    """
+    logged_out = False
+
+    # 策略1：点击按钮
+    try:
+        sb.wait_for_element_visible(LOGOUT_SEL, timeout=10)
+        sb.scroll_to(LOGOUT_SEL)
+        time.sleep(0.3)
+        sb.click(LOGOUT_SEL)
+        sb.wait_for_element_visible("body", timeout=20)
+        time.sleep(1.5)
+        url_now = (sb.get_current_url() or "").lower()
+        if "/login" in url_now:
+            logged_out = True
+        elif sb.is_element_visible(EMAIL_SEL) and sb.is_element_visible(PASS_SEL):
+            logged_out = True
+    except Exception as e:
+        print(f"⚠️ 点击退出按钮失败：{e}")
+
+    # 策略2：直接访问 /logout URL 兜底
+    if not logged_out:
+        try:
+            print(f"🔄 兜底：直接访问 {LOGOUT_URL}")
+            sb.open(LOGOUT_URL)
+            sb.wait_for_element_visible("body", timeout=20)
+            time.sleep(1.5)
+            url_now = (sb.get_current_url() or "").lower()
+            if "/login" in url_now:
+                logged_out = True
+            elif sb.is_element_visible(EMAIL_SEL) and sb.is_element_visible(PASS_SEL):
+                logged_out = True
+        except Exception as e:
+            print(f"⚠️ 直接访问 /logout 也失败：{e}")
+
+    if not logged_out:
+        screenshot(sb, f"logout_verify_failed_{int(time.time())}.png")
+
+    return logged_out
+
+
 def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool]:
     """
     登录成功后：
       0) 从 Manage Servers 卡片中提取 server_id，并进入 server 页（等待 Now managing）
       1) server 页停留 4-6 秒
       2) 返回首页 / 停留 3-5 秒
-      3) 点击 logout，并验证回到登录页
+      3) 退出登录（点击按钮 + 直接访问 /logout 兜底）
     返回 (server_id, logout_ok)
     """
     # 0) 提取 server_id 并进 server 页
@@ -270,45 +292,27 @@ def _post_login_visit_then_logout(sb: SB) -> Tuple[Optional[str], bool]:
     try:
         print(f"↩️ 返回首页：{HOME_URL}")
         sb.open(HOME_URL)
+        # 等待首页核心元素（logout 按钮或 body）出现
         sb.wait_for_element_visible("body", timeout=30)
+        # 额外等 logout 按钮确认已登录态渲染
+        try:
+            sb.wait_for_element_visible(LOGOUT_SEL, timeout=15)
+        except Exception:
+            print("⚠️ 首页未检测到退出按钮，仍继续尝试退出...")
     except Exception:
         screenshot(sb, f"back_home_failed_{int(time.time())}.png")
-        return server_id, False
+        # 首页打开失败，直接尝试 /logout 兜底退出
+        print("⚠️ 回首页失败，直接尝试 /logout...")
+        logout_ok = _do_logout(sb)
+        return server_id, logout_ok
 
     stay2 = random.randint(3, 5)
     print(f"⏳ 首页停留 {stay2} 秒...")
     time.sleep(stay2)
 
-    # 3) 点退出
-    try:
-        sb.wait_for_element_visible(LOGOUT_SEL, timeout=15)
-        sb.scroll_to(LOGOUT_SEL)
-        time.sleep(0.3)
-        sb.click(LOGOUT_SEL)
-    except Exception:
-        screenshot(sb, f"logout_click_failed_{int(time.time())}.png")
-        return server_id, False
-
-    sb.wait_for_element_visible("body", timeout=30)
-    time.sleep(1)
-
-    # 退出成功：回到登录页（#email 出现）或 URL 包含 /login
-    try:
-        url_now = (sb.get_current_url() or "").lower()
-    except Exception:
-        url_now = ""
-
-    if "/login" in url_now:
-        return server_id, True
-
-    try:
-        if sb.is_element_visible(EMAIL_SEL) and sb.is_element_visible(PASS_SEL):
-            return server_id, True
-    except Exception:
-        pass
-
-    screenshot(sb, f"logout_verify_failed_{int(time.time())}.png")
-    return server_id, False
+    # 3) 退出
+    logout_ok = _do_logout(sb)
+    return server_id, logout_ok
 
 
 def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optional[str], bool, str, Optional[str], bool]:
@@ -320,12 +324,10 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
       - "OK"   登录成功（无论 logout 是否成功）
       - "FAIL" 登录失败
     """
-    # CF: UC 模式是绕过 CF 自动化识别的关键基础
-    with SB(uc=True, locale="en", test=True) as sb:  # CF
-        print("🚀 浏览器启动（UC Mode）")  # CF
+    with SB(uc=True, locale="en", test=True) as sb:
+        print("🚀 浏览器启动（UC Mode）")
 
-        # CF: 用 UC 方式打开页面 + 重连机制
-        sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)  # CF
+        sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
         time.sleep(2)
 
         # ===== 业务：填写并提交登录表单 =====
@@ -342,24 +344,21 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
         sb.clear(PASS_SEL)
         sb.type(PASS_SEL, password)
 
-        # CF: 提交前尽量过盾（有的站提交前就需要点 Turnstile）
-        _try_click_captcha(sb, "提交前")  # CF
+        _try_click_captcha(sb, "提交前")
 
         sb.click(SUBMIT_SEL)
         sb.wait_for_element_visible("body", timeout=30)
         time.sleep(2)
 
-        # CF: 提交后再试一次（很多站是提交后才弹）
-        _try_click_captcha(sb, "提交后")  # CF
+        _try_click_captcha(sb, "提交后")
 
-        # CF: 获取 cf_clearance 判断是否过盾（不是必须，但可用于日志/诊断）
-        has_cf = _has_cf_clearance(sb)  # CF
+        has_cf = _has_cf_clearance(sb)
         current_url = (sb.get_current_url() or "").strip()
 
         # ===== 业务：判定登录成功 =====
         welcome_text = None
         logged_in = False
-        for _ in range(10):  # 最多等 ~10 秒
+        for _ in range(10):
             logged_in, welcome_text = _is_logged_in(sb)
             if logged_in:
                 break
@@ -371,7 +370,6 @@ def login_then_flow_one_account(email: str, password: str) -> Tuple[str, Optiona
         # ===== 业务：登录后提取 server_id -> 进 server 页 -> 回首页 -> 退出 =====
         server_id, logout_ok = _post_login_visit_then_logout(sb)
 
-        # 更新一下当前 URL
         try:
             current_url = (sb.get_current_url() or "").strip()
         except Exception:
@@ -388,6 +386,9 @@ def main():
     fail = 0
     logout_ok_count = 0
     tg_dests = set()
+
+    # ✅ 修复：收集每个账号的结果消息，最后统一发送一条 TG 通知
+    account_lines: List[str] = []
 
     try:
         for i, acc in enumerate(accounts, start=1):
@@ -413,43 +414,43 @@ def main():
                     ok += 1
                     if logout_ok:
                         logout_ok_count += 1
-                    msg = (
-                        f"✅ Lunes BetaDash 登录成功\n"
-                        f"账号：{safe_email}\n"
-                        f"server_id：{server_id or '未提取到'}\n"
-                        f"welcome：{welcome_text or '未读取到'}\n"
-                        f"退出：{'✅ 成功' if logout_ok else '❌ 失败'}\n"
-                        f"当前页：{url_now}\n"
-                        f"cf_clearance：{'OK' if has_cf else 'NONE'}"
+                    line = (
+                        f"✅ {safe_email} | server:{server_id or '?'} | "
+                        f"退出:{'✅' if logout_ok else '❌'} | "
+                        f"cf:{'OK' if has_cf else 'NONE'}"
                     )
                 else:
                     fail += 1
-                    msg = (
-                        f"❌ Lunes BetaDash 登录失败\n"
-                        f"账号：{safe_email}\n"
-                        f"welcome：{welcome_text or '未检测到'}\n"
-                        f"当前页：{url_now}\n"
-                        f"cf_clearance：{'OK' if has_cf else 'NONE'}"
+                    line = (
+                        f"❌ {safe_email} | 登录失败 | "
+                        f"cf:{'OK' if has_cf else 'NONE'} | 页:{url_now}"
                     )
 
-                print(msg)
-                tg_send(msg, tg_token, tg_chat)
+                print(line)
+                account_lines.append(line)
 
             except Exception as e:
                 fail += 1
-                msg = f"❌ Lunes BetaDash 脚本异常\n账号：{safe_email}\n错误：{e}"
-                print(msg)
-                tg_send(msg, tg_token, tg_chat)
+                line = f"❌ {safe_email} | 脚本异常：{e}"
+                print(line)
+                account_lines.append(line)
 
             # 账号之间冷却
             time.sleep(5)
             if i < len(accounts):
                 time.sleep(5)
 
-        summary = f"📌 本次批量完成：登录成功 {ok} / 失败 {fail} | 退出成功 {logout_ok_count}/{ok}"
-        print("\n" + summary)
+        summary_header = (
+            f"📌 Lunes BetaDash 批量保活完成\n"
+            f"登录成功 {ok} / 失败 {fail} | 退出成功 {logout_ok_count}/{ok}\n"
+            f"{'─' * 30}"
+        )
+        summary_body = "\n".join(account_lines)
+        full_summary = f"{summary_header}\n{summary_body}"
+
+        print("\n" + full_summary)
         for token, chat in sorted(tg_dests):
-            tg_send(summary, token, chat)
+            tg_send(full_summary, token, chat)
 
     finally:
         if display:
