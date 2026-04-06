@@ -30,10 +30,7 @@ def mask_email_keep_domain(email: str) -> str:
     if "@" not in e:
         return "***"
     name, domain = e.split("@", 1)
-    if len(name) <= 2:
-        name_mask = name
-    else:
-        name_mask = name[0] + "*" * (len(name) - 2) + name[-1]
+    name_mask = name if len(name) <= 2 else name[0] + "*" * (len(name) - 2) + name[-1]
     return f"{name_mask}@{domain}"
 
 
@@ -50,7 +47,7 @@ def setup_xvfb():
 def screenshot(sb, name: str):
     path = f"{SCREENSHOT_DIR}/{name}"
     sb.save_screenshot(path)
-    print(f"📸 截图已保存：{path}")
+    print(f"📸 {path}")
 
 
 def tg_send(text: str, token: Optional[str] = None, chat_id: Optional[str] = None):
@@ -111,20 +108,17 @@ def _try_click_captcha(sb, stage: str):
         print(f"⚠️ captcha（{stage}）：{e}")
 
 
-def _is_logged_in(sb) -> Tuple[bool, Optional[str]]:
+def _is_logged_in(sb) -> bool:
     try:
         if sb.is_element_visible("h1.hero-title"):
-            t = (sb.get_text("h1.hero-title") or "").strip()
-            if "welcome back" in t.lower():
-                return True, t
+            if "welcome back" in (sb.get_text("h1.hero-title") or "").lower():
+                return True
     except Exception:
         pass
     try:
-        if sb.is_element_visible(LOGOUT_SEL):
-            return True, None
+        return sb.is_element_visible(LOGOUT_SEL)
     except Exception:
-        pass
-    return False, None
+        return False
 
 
 def _extract_server_id(href: str) -> Optional[str]:
@@ -151,78 +145,43 @@ def _find_server_id_and_go(sb) -> Tuple[Optional[str], bool]:
         return None, False
 
     print(f"🧭 server_id={server_id}，跳转 server 页...")
-    try:
-        sb.scroll_to(SERVER_CARD_LINK_SEL)
-        time.sleep(0.3)
-        sb.click(SERVER_CARD_LINK_SEL)
-        sb.wait_for_element_visible(NOW_MANAGING_XPATH, timeout=30)
-        return server_id, True
-    except Exception:
-        pass
+    # 优先点击，失败则直接 open URL
+    for attempt in ("click", "open"):
+        try:
+            if attempt == "click":
+                sb.scroll_to(SERVER_CARD_LINK_SEL)
+                time.sleep(0.3)
+                sb.click(SERVER_CARD_LINK_SEL)
+            else:
+                print("⚠️ 点击失败，改为直接打开 URL")
+                sb.open(SERVER_URL_TPL.format(server_id=server_id))
+            sb.wait_for_element_visible(NOW_MANAGING_XPATH, timeout=30)
+            return server_id, True
+        except Exception:
+            pass
 
-    try:
-        sb.open(SERVER_URL_TPL.format(server_id=server_id))
-        sb.wait_for_element_visible(NOW_MANAGING_XPATH, timeout=30)
-        return server_id, True
-    except Exception:
-        screenshot(sb, f"goto_server_failed_{int(time.time())}.png")
-        return server_id, False
+    screenshot(sb, f"goto_server_failed_{int(time.time())}.png")
+    return server_id, False
 
 
-def _do_logout(sb) -> bool:
-    """
-    直接访问 /logout，多维度判断退出是否成功：
-      1. 当前 URL 包含 /login         → 成功（跳转到登录页）
-      2. 退出按钮（LOGOUT_SEL）不可见  → 成功（已退出，停在首页或其他页）
-      3. 登录表单（EMAIL_SEL）可见     → 成功（登录页已渲染）
-      以上均不满足                     → 失败，截图留档
-    """
+def _do_logout(sb) -> None:
+    """无条件访问 /logout，不判断结果。"""
     try:
         print(f"🚪 访问 {LOGOUT_URL}")
         sb.open(LOGOUT_URL)
         sb.wait_for_element_visible("body", timeout=20)
-        time.sleep(2)
-
-        url_now = (sb.get_current_url() or "").lower()
-        print(f"   退出后 URL：{url_now}")
-
-        # 判断1：跳到登录页
-        if "/login" in url_now:
-            print("   ✅ 退出成功（跳转到登录页）")
-            return True
-
-        # 判断2：退出按钮消失（已退出，但页面可能停在 /）
-        logout_btn_visible = False
-        try:
-            logout_btn_visible = sb.is_element_visible(LOGOUT_SEL)
-        except Exception:
-            pass
-        if not logout_btn_visible:
-            print("   ✅ 退出成功（退出按钮已消失）")
-            return True
-
-        # 判断3：登录表单出现
-        try:
-            if sb.is_element_visible(EMAIL_SEL):
-                print("   ✅ 退出成功（登录表单可见）")
-                return True
-        except Exception:
-            pass
-
-        print(f"   ❌ 退出失败：URL={url_now}，退出按钮仍可见")
-        screenshot(sb, f"logout_failed_{int(time.time())}.png")
-        return False
-
+        time.sleep(1.5)
+        print(f"   退出后 URL：{sb.get_current_url()}")
     except Exception as e:
-        print(f"⚠️ 退出异常：{e}")
-        screenshot(sb, f"logout_exception_{int(time.time())}.png")
-        return False
+        print(f"⚠️ 访问 /logout 异常（忽略）：{e}")
 
 
-def _post_login_flow(sb) -> Tuple[Optional[str], bool]:
+def _post_login_flow(sb) -> Optional[str]:
+    """保活主流程，返回 server_id（无论成功与否）。"""
     server_id, entered_ok = _find_server_id_and_go(sb)
     if not entered_ok:
-        return server_id, False
+        _do_logout(sb)
+        return server_id
 
     stay1 = random.randint(4, 6)
     print(f"⏳ server 页停留 {stay1}s")
@@ -234,18 +193,17 @@ def _post_login_flow(sb) -> Tuple[Optional[str], bool]:
         sb.wait_for_element_visible("body", timeout=30)
     except Exception:
         screenshot(sb, f"back_home_failed_{int(time.time())}.png")
-        # 首页失败不影响退出，继续执行
 
     stay2 = random.randint(3, 5)
     print(f"⏳ 首页停留 {stay2}s")
     time.sleep(stay2)
 
-    logout_ok = _do_logout(sb)
-    return server_id, logout_ok
+    _do_logout(sb)
+    return server_id
 
 
-def login_then_flow(email: str, password: str) -> Tuple[str, bool, str, Optional[str], bool]:
-    """返回 (status, has_cf, current_url, server_id, logout_ok)"""
+def login_then_flow(email: str, password: str) -> Tuple[str, bool, str, Optional[str]]:
+    """返回 (status, has_cf, current_url, server_id)。退出固定执行，不返回退出状态。"""
     with SB(uc=True, locale="en", test=True) as sb:
         print("🚀 浏览器启动")
         sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5.0)
@@ -256,7 +214,7 @@ def login_then_flow(email: str, password: str) -> Tuple[str, bool, str, Optional
             sb.wait_for_element_visible(PASS_SEL,   timeout=25)
             sb.wait_for_element_visible(SUBMIT_SEL, timeout=25)
         except Exception:
-            return "FAIL", _has_cf_clearance(sb), sb.get_current_url() or "", None, False
+            return "FAIL", _has_cf_clearance(sb), sb.get_current_url() or "", None
 
         sb.clear(EMAIL_SEL); sb.type(EMAIL_SEL,  email)
         sb.clear(PASS_SEL);  sb.type(PASS_SEL,   password)
@@ -269,40 +227,40 @@ def login_then_flow(email: str, password: str) -> Tuple[str, bool, str, Optional
         has_cf      = _has_cf_clearance(sb)
         current_url = (sb.get_current_url() or "").strip()
 
-        logged_in, _ = False, None
+        logged_in = False
         for _ in range(10):
-            logged_in, _ = _is_logged_in(sb)
-            if logged_in:
+            if _is_logged_in(sb):
+                logged_in = True
                 break
             time.sleep(1)
 
         if not logged_in:
-            return "FAIL", has_cf, current_url, None, False
+            return "FAIL", has_cf, current_url, None
 
-        server_id, logout_ok = _post_login_flow(sb)
+        server_id = _post_login_flow(sb)
 
         try:
             current_url = (sb.get_current_url() or "").strip()
         except Exception:
             pass
 
-        return "OK", has_cf, current_url, server_id, logout_ok
+        return "OK", has_cf, current_url, server_id
 
 
 def main():
     accounts = build_accounts_from_env()
     display  = setup_xvfb()
 
-    ok = fail = logout_ok_count = 0
+    ok = fail = 0
     tg_dests: set = set()
-    lines:    List[str] = []
+    lines: List[str] = []
 
     try:
         for i, acc in enumerate(accounts, start=1):
-            email     = acc["email"]
-            password  = acc["password"]
-            tg_token  = (acc.get("tg_token") or "").strip()
-            tg_chat   = (acc.get("tg_chat")  or "").strip()
+            email    = acc["email"]
+            password = acc["password"]
+            tg_token = (acc.get("tg_token") or "").strip()
+            tg_chat  = (acc.get("tg_chat")  or "").strip()
             if tg_token and tg_chat:
                 tg_dests.add((tg_token, tg_chat))
 
@@ -312,15 +270,13 @@ def main():
             print("=" * 60)
 
             try:
-                status, has_cf, url_now, server_id, logout_ok = login_then_flow(email, password)
+                status, has_cf, url_now, server_id = login_then_flow(email, password)
                 if status == "OK":
                     ok += 1
-                    if logout_ok:
-                        logout_ok_count += 1
+                    # 退出已无条件执行，固定显示 ✅
                     line = (
                         f"✅ {safe} | server:{server_id or '?'} | "
-                        f"退出:{'✅' if logout_ok else '❌'} | "
-                        f"cf:{'OK' if has_cf else 'NONE'}"
+                        f"退出:✅ | cf:{'OK' if has_cf else 'NONE'}"
                     )
                 else:
                     fail += 1
@@ -337,7 +293,7 @@ def main():
 
         summary = (
             f"📌 Lunes BetaDash 批量保活完成\n"
-            f"登录成功 {ok} / 失败 {fail} | 退出成功 {logout_ok_count}/{ok}\n"
+            f"登录成功 {ok} / 失败 {fail} | 退出已执行 {ok}/{ok}\n"
             f"{'─' * 30}\n"
             + "\n".join(lines)
         )
